@@ -73,8 +73,7 @@ jobs:
           arch: x86_64
           profile: pixel_7
           script: |
-            cd source
-            OUT_DIR=out/test-artifacts bash tool/ci/run_emulator_tests.sh
+            bash -lc "cd source && OUT_DIR=out/test-artifacts bash tool/ci/run_emulator_tests.sh"
 
       - name: Upload test artifacts
         uses: actions/upload-artifact@v4
