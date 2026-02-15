@@ -72,6 +72,7 @@ jobs:
           target: default
           arch: x86_64
           profile: pixel_7
+          disable-animations: false
           emulator-options: -no-window -noaudio -gpu swiftshader_indirect -camera-back none -camera-front none
           script: |
             bash -lc "cd source && SUITE=${{ inputs.suite }} OUT_DIR=out/test-artifacts bash tool/ci/run_emulator_tests.sh"
