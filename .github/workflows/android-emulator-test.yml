@@ -158,6 +158,9 @@ jobs:
 
           export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME}}"
           export PATH="${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin:${ANDROID_SDK_ROOT}/platform-tools:${ANDROID_SDK_ROOT}/emulator:${PATH}"
+          export ANDROID_SDK_HOME="${GITHUB_WORKSPACE}/.ci-android-home"
+          export ANDROID_AVD_HOME="${ANDROID_SDK_HOME}/avd"
+          mkdir -p "${ANDROID_AVD_HOME}"
 
           log "accept sdk licenses"
           yes | sdkmanager --licenses >/dev/null || true
@@ -169,7 +172,14 @@ jobs:
             "system-images;android-35;default;x86_64"
 
           log "create avd"
-          echo "no" | avdmanager create avd -f -n ci_api35 -k "system-images;android-35;default;x86_64" --device "pixel_7"
+          echo "no" | avdmanager create avd -f -n ci_api35 -k "system-images;android-35;default;x86_64" --device "pixel_7" --path "${ANDROID_AVD_HOME}/ci_api35"
+          AVAILABLE_AVDS="$(emulator -list-avds || true)"
+          printf '%s\n' "${AVAILABLE_AVDS}" | tee -a "${RUNTIME_LOG}"
+          if ! grep -qx "ci_api35" <<< "${AVAILABLE_AVDS}"; then
+            log "avd ci_api35 missing after creation"
+            find "${ANDROID_SDK_HOME}" -maxdepth 3 -type f | head -n 120 | tee -a "${BOOT_LOG}" || true
+            exit 1
+          fi
 
           log "start emulator process"
           emulator -avd ci_api35 \
