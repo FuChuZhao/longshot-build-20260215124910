@@ -65,6 +65,15 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Assemble APKs before emulator start
+        run: |
+          bash -lc "cd source && timeout 25m gradle --no-daemon \
+            :apps:longshot:assembleDebug \
+            :apps:scenelab:assembleDebug \
+            :apps:visualrecorder:assembleDebug \
+            :qa:uiauto:assembleDebug \
+            :qa:uiauto:assembleDebugAndroidTest"
+
       - name: Run instrumentation on emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -72,10 +81,11 @@ jobs:
           target: default
           arch: x86_64
           profile: pixel_7
+          force-avd-creation: true
           disable-animations: false
-          emulator-options: -no-window -noaudio -gpu swiftshader_indirect -camera-back none -camera-front none
+          emulator-options: -no-window -noaudio -gpu swiftshader_indirect -camera-back none -camera-front none -no-snapshot -no-snapshot-save -no-snapshot-load
           script: |
-            bash -lc "cd source && SUITE=${{ inputs.suite }} OUT_DIR=out/test-artifacts bash tool/ci/run_emulator_tests.sh"
+            bash -lc "cd source && SUITE=${{ inputs.suite }} SKIP_ASSEMBLE=1 OUT_DIR=out/test-artifacts bash tool/ci/run_emulator_tests.sh"
 
       - name: Upload test artifacts
         if: always()
