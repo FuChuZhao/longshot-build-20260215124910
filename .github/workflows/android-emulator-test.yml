@@ -95,20 +95,83 @@ jobs:
           ART_DIR="source/out/test-artifacts"
           EMU_LOG="${ART_DIR}/emulator.log"
           BOOT_LOG="${ART_DIR}/emulator-boot.txt"
+          RUNTIME_LOG="${ART_DIR}/workflow-runtime.log"
 
           mkdir -p "${ART_DIR}"
+          : > "${EMU_LOG}"
+          : > "${BOOT_LOG}"
+          : > "${RUNTIME_LOG}"
+
+          log() {
+            echo "[$(date -u +'%Y-%m-%dT%H:%M:%SZ')] $*" | tee -a "${RUNTIME_LOG}"
+          }
+
+          dump_diag() {
+            log "diag: adb devices"
+            adb devices -l | tee -a "${BOOT_LOG}" || true
+            log "diag: emulator log tail"
+            tail -n 160 "${EMU_LOG}" | tee -a "${BOOT_LOG}" || true
+          }
+
+          wait_for_adb_device() {
+            local timeout_secs="${1:-300}"
+            local start_ts current_ts serial
+            start_ts="$(date +%s)"
+            while true; do
+              serial="$(adb devices | awk 'NR>1 && $2 == "device" && $1 ~ /^emulator-/ {print $1; exit}')"
+              if [[ -n "${serial}" ]]; then
+                printf '%s' "${serial}"
+                return 0
+              fi
+              current_ts="$(date +%s)"
+              if (( current_ts - start_ts >= timeout_secs )); then
+                return 1
+              fi
+              sleep 2
+            done
+          }
+
+          wait_for_prop() {
+            local prop="$1"
+            local expected="$2"
+            local timeout_secs="$3"
+            local start_ts current_ts value
+            start_ts="$(date +%s)"
+            while true; do
+              value="$(adb -s "${ANDROID_SERIAL}" shell getprop "${prop}" 2>/dev/null | tr -d '\r')"
+              if [[ "${value}" == "${expected}" ]]; then
+                return 0
+              fi
+              current_ts="$(date +%s)"
+              if (( current_ts - start_ts >= timeout_secs )); then
+                log "timeout waiting prop ${prop}=${expected}, current=${value}"
+                return 1
+              fi
+              sleep 2
+            done
+          }
+
+          on_error() {
+            dump_diag
+          }
+          trap on_error ERR
+
           export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME}}"
           export PATH="${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin:${ANDROID_SDK_ROOT}/platform-tools:${ANDROID_SDK_ROOT}/emulator:${PATH}"
 
+          log "accept sdk licenses"
           yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager --install \
+          log "install emulator dependencies"
+          timeout 20m sdkmanager --install \
             "platform-tools" \
             "emulator" \
             "platforms;android-35" \
             "system-images;android-35;default;x86_64"
 
+          log "create avd"
           echo "no" | avdmanager create avd -f -n ci_api35 -k "system-images;android-35;default;x86_64" --device "pixel_7"
 
+          log "start emulator process"
           emulator -avd ci_api35 \
             -no-window -noaudio \
             -gpu swiftshader_indirect \
@@ -118,23 +181,30 @@ jobs:
           EMU_PID=$!
 
           cleanup() {
-            adb -e emu kill >/dev/null 2>&1 || true
+            adb -s "${ANDROID_SERIAL:-emulator-5554}" emu kill >/dev/null 2>&1 || adb -e emu kill >/dev/null 2>&1 || true
             wait "${EMU_PID}" >/dev/null 2>&1 || true
           }
           trap cleanup EXIT
 
           adb start-server
-          adb wait-for-device
-          timeout 6m bash -lc 'until [[ "$(adb shell getprop sys.boot_completed | tr -d "\r")" == "1" ]]; do sleep 2; done'
-          timeout 3m bash -lc 'until [[ "$(adb shell getprop init.svc.bootanim | tr -d "\r")" == "stopped" ]]; do sleep 2; done'
+          log "wait for emulator adb registration"
+          ANDROID_SERIAL="$(wait_for_adb_device 360)"
+          export ANDROID_SERIAL
+          log "emulator serial=${ANDROID_SERIAL}"
+
+          timeout 2m adb -s "${ANDROID_SERIAL}" wait-for-device
+          wait_for_prop "sys.boot_completed" "1" 420
+          wait_for_prop "init.svc.bootanim" "stopped" 240
 
           {
-            echo "boot_completed=$(adb shell getprop sys.boot_completed | tr -d '\r')"
-            echo "bootanim=$(adb shell getprop init.svc.bootanim | tr -d '\r')"
-            adb shell service list | head -n 40 || true
+            echo "serial=${ANDROID_SERIAL}"
+            echo "boot_completed=$(adb -s "${ANDROID_SERIAL}" shell getprop sys.boot_completed | tr -d '\r')"
+            echo "bootanim=$(adb -s "${ANDROID_SERIAL}" shell getprop init.svc.bootanim | tr -d '\r')"
+            adb -s "${ANDROID_SERIAL}" shell service list | head -n 40 || true
           } >"${BOOT_LOG}" 2>&1
 
-          bash -lc "cd source && SUITE=${SUITE} SKIP_ASSEMBLE=1 OUT_DIR=out/test-artifacts bash tool/ci/run_emulator_tests.sh"
+          log "run instrumentation suite=${SUITE}"
+          timeout 20m bash -lc "cd source && SUITE=${SUITE} SKIP_ASSEMBLE=1 OUT_DIR=out/test-artifacts bash tool/ci/run_emulator_tests.sh"
 
       - name: Upload test artifacts
         if: always()
