@@ -1,0 +1,79 @@
+name: android-build
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_repo:
+        description: "Private SOURCE_REPO (owner/name)"
+        required: true
+        type: string
+      source_ref:
+        description: "Ref or commit in SOURCE_REPO"
+        required: true
+        default: "main"
+        type: string
+      artifact_name:
+        description: "Artifact name"
+        required: true
+        default: "android-artifacts"
+        type: string
+      build_profile:
+        description: "Build profile"
+        required: true
+        default: "baseline"
+        type: choice
+        options:
+          - baseline
+          - release
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout build workflow repo
+        uses: actions/checkout@v4
+
+      - name: Configure SSH for private source clone
+        env:
+          SOURCE_REPO_SSH_KEY: ${{ secrets.SOURCE_REPO_SSH_KEY }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SOURCE_REPO_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+
+      - name: Clone private source repository
+        run: |
+          git clone "git@github.com:${{ inputs.source_repo }}.git" source
+          cd source
+          git checkout "${{ inputs.source_ref }}"
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Run private build entry script
+        working-directory: source
+        env:
+          OUT_DIR: out/artifacts
+        run: |
+          bash tool/ci/build_android.sh "${{ inputs.build_profile }}"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: source/out/artifacts
+          if-no-files-found: error
+          retention-days: 1
