@@ -62,6 +62,13 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Enable KVM access
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm || true
+
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
@@ -74,19 +81,60 @@ jobs:
             :qa:uiauto:assembleDebug \
             :qa:uiauto:assembleDebugAndroidTest"
 
-      - name: Run instrumentation on emulator
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 35
-          target: default
-          arch: x86_64
-          profile: pixel_7
-          force-avd-creation: false
-          emulator-boot-timeout: 300
-          disable-animations: false
-          emulator-options: -no-window -noaudio -gpu swiftshader_indirect -camera-back none -camera-front none -no-snapshot -no-snapshot-save -no-snapshot-load
-          script: |
-            bash -lc "cd source && SUITE=${{ inputs.suite }} SKIP_ASSEMBLE=1 OUT_DIR=out/test-artifacts bash tool/ci/run_emulator_tests.sh"
+      - name: Prepare artifact workspace
+        run: |
+          mkdir -p source/out/test-artifacts
+          echo "workflow_started_at=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" > source/out/test-artifacts/workflow-heartbeat.txt
+
+      - name: Run instrumentation on emulator (manual)
+        env:
+          SUITE: ${{ inputs.suite }}
+        run: |
+          set -euo pipefail
+
+          ART_DIR="source/out/test-artifacts"
+          EMU_LOG="${ART_DIR}/emulator.log"
+          BOOT_LOG="${ART_DIR}/emulator-boot.txt"
+
+          mkdir -p "${ART_DIR}"
+          export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME}}"
+          export PATH="${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin:${ANDROID_SDK_ROOT}/platform-tools:${ANDROID_SDK_ROOT}/emulator:${PATH}"
+
+          yes | sdkmanager --licenses >/dev/null
+          sdkmanager --install \
+            "platform-tools" \
+            "emulator" \
+            "platforms;android-35" \
+            "system-images;android-35;default;x86_64"
+
+          echo "no" | avdmanager create avd -f -n ci_api35 -k "system-images;android-35;default;x86_64" --device "pixel_7"
+
+          emulator -avd ci_api35 \
+            -no-window -noaudio \
+            -gpu swiftshader_indirect \
+            -camera-back none -camera-front none \
+            -no-boot-anim -no-snapshot-load -no-snapshot-save -wipe-data \
+            >"${EMU_LOG}" 2>&1 &
+          EMU_PID=$!
+
+          cleanup() {
+            adb -e emu kill >/dev/null 2>&1 || true
+            wait "${EMU_PID}" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          adb start-server
+          adb wait-for-device
+          timeout 6m bash -lc 'until [[ "$(adb shell getprop sys.boot_completed | tr -d "\r")" == "1" ]]; do sleep 2; done'
+          timeout 3m bash -lc 'until [[ "$(adb shell getprop init.svc.bootanim | tr -d "\r")" == "stopped" ]]; do sleep 2; done'
+
+          {
+            echo "boot_completed=$(adb shell getprop sys.boot_completed | tr -d '\r')"
+            echo "bootanim=$(adb shell getprop init.svc.bootanim | tr -d '\r')"
+            adb shell service list | head -n 40 || true
+          } >"${BOOT_LOG}" 2>&1
+
+          bash -lc "cd source && SUITE=${SUITE} SKIP_ASSEMBLE=1 OUT_DIR=out/test-artifacts bash tool/ci/run_emulator_tests.sh"
 
       - name: Upload test artifacts
         if: always()
