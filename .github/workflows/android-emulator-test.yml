@@ -33,6 +33,7 @@ permissions:
 jobs:
   emulator-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 50
     steps:
       - name: Checkout build workflow repo
         uses: actions/checkout@v4
