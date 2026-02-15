@@ -73,7 +73,7 @@ jobs:
           arch: x86_64
           profile: pixel_7
           script: |
-            bash -lc "cd source && OUT_DIR=out/test-artifacts bash tool/ci/run_emulator_tests.sh"
+            bash -lc "cd source && SUITE=${{ inputs.suite }} OUT_DIR=out/test-artifacts bash tool/ci/run_emulator_tests.sh"
 
       - name: Upload test artifacts
         if: always()
