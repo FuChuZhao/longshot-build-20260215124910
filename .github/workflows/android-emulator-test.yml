@@ -27,6 +27,7 @@ on:
           - dynamic
           - web
           - protocol
+          - mimic
 
 permissions:
   contents: read
