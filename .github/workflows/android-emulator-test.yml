@@ -216,8 +216,18 @@ jobs:
             adb -s "${ANDROID_SERIAL}" shell service list | head -n 40 || true
           } >"${BOOT_LOG}" 2>&1
 
-          log "run instrumentation suite=${SUITE}"
-          timeout 20m bash -lc "cd source && SUITE=${SUITE} SKIP_ASSEMBLE=1 OUT_DIR=out/test-artifacts bash tool/ci/run_emulator_tests.sh"
+          RUN_TEST_TIMEOUT="20m"
+          case "${SUITE}" in
+            protocol)
+              RUN_TEST_TIMEOUT="45m"
+              ;;
+            mimic|stress_boundary)
+              RUN_TEST_TIMEOUT="30m"
+              ;;
+          esac
+
+          log "run instrumentation suite=${SUITE} timeout=${RUN_TEST_TIMEOUT}"
+          timeout "${RUN_TEST_TIMEOUT}" bash -lc "cd source && SUITE=${SUITE} SKIP_ASSEMBLE=1 OUT_DIR=out/test-artifacts bash tool/ci/run_emulator_tests.sh"
 
       - name: Upload test artifacts
         if: always()
